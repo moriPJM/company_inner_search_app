@@ -22,6 +22,15 @@ import constants as ct
 # 「.env」ファイルで定義した環境変数の読み込み
 load_dotenv()
 
+# Streamlit Cloud対応: secretsからOpenAI APIキーを取得
+try:
+    # Streamlit Cloudで実行される場合のみ有効
+    if 'streamlit' in globals() and hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+        os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+except:
+    # ローカル環境では.envファイルが使用される
+    pass
+
 
 ############################################################
 # 関数定義
