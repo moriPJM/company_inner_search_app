@@ -23,10 +23,14 @@ import constants as ct
 load_dotenv()
 
 # Streamlit Cloud対応: secretsからOpenAI APIキーを取得
+# ローカル環境では.envファイルの値を優先し、Streamlit Cloudでのみsecretsを使用
 try:
-    # Streamlit Cloudで実行される場合のみ有効
-    if 'streamlit' in globals() and hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-        os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+    # ローカル環境で有効なAPIキーが既に設定されている場合は、それを優先
+    if not os.getenv('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY').startswith('your-'):
+        # Streamlit Cloudでのみ有効
+        if 'streamlit' in globals() and hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+            if not st.secrets['OPENAI_API_KEY'].startswith('your-'):
+                os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
 except:
     # ローカル環境では.envファイルが使用される
     pass
