@@ -26,8 +26,70 @@ import constants as ct
 ############################################################
 # ブラウザタブの表示文言を設定
 st.set_page_config(
-    page_title=ct.APP_NAME
+    page_title=ct.APP_NAME,
+    layout="wide"
 )
+
+# カスタムCSSの適用
+st.markdown("""
+<style>
+    /* サイドバーのスタイル調整 */
+    .css-1d391kg {
+        padding-top: 2rem;
+    }
+    
+    /* メインコンテンツエリアの調整 */
+    .main .block-container {
+        padding-top: 2rem;
+        max-width: none;
+    }
+    
+    /* チャット入力欄のスタイル調整 */
+    .stChatInput {
+        margin-top: 1rem;
+    }
+    
+    /* チャット入力欄の背景色を緑色に */
+    .stChatInput > div {
+        background-color: #e8f5e8 !important;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    
+    /* 入力フィールドの背景色も緑色に */
+    .stChatInput input {
+        background-color: #f0f8f0 !important;
+        border: 1px solid #90ee90 !important;
+    }
+    
+    /* AIアシスタントのメッセージ背景を薄い緑色に（複数のセレクタを試す） */
+    .stChatMessage[data-testid="assistant-message"],
+    .stChatMessage[data-testid="chat-message-assistant"],
+    div[data-testid="chat-message-assistant"],
+    .stChatMessage:has([data-testid="assistant-avatar"]) {
+        background-color: #e8f5e8 !important;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    /* チャットメッセージ全般のスタイル（assistantアバターを含む） */
+    div[data-testid="stChatMessage"]:has(img[alt="assistant"]) {
+        background-color: #e8f5e8 !important;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    /* 警告メッセージのスタイル調整 */
+    .stAlert[data-baseweb="notification"],
+    div[data-testid="stAlert"] {
+        background-color: #fff3cd !important;
+        border: 1px solid #ffeaa7 !important;
+        border-radius: 8px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ログ出力を行うためのロガーの設定
 logger = logging.getLogger(ct.LOGGER_NAME)
@@ -52,23 +114,31 @@ if not "initialized" in st.session_state:
     st.session_state.initialized = True
     logger.info(ct.APP_BOOT_MESSAGE)
 
+# セッション状態の初期化
+if "mode" not in st.session_state:
+    st.session_state.mode = ct.ANSWER_MODE_1
+
 
 ############################################################
-# 4. 初期表示
+# 4. サイドバーの表示
+############################################################
+with st.sidebar:
+    # 利用目的タイトル
+    st.markdown("## 利用目的")
+    
+    # モード表示（サイドバーに移動）
+    cn.display_select_mode()
+
+############################################################
+# 5. メインコンテンツエリアの表示
 ############################################################
 # タイトル表示
 cn.display_app_title()
 
-# モード表示
-cn.display_select_mode()
-
 # AIメッセージの初期表示
 cn.display_initial_ai_message()
 
-
-############################################################
-# 5. 会話ログの表示
-############################################################
+# 会話ログの表示
 try:
     # 会話ログの表示
     cn.display_conversation_log()
@@ -80,9 +150,8 @@ except Exception as e:
     # 後続の処理を中断
     st.stop()
 
-
 ############################################################
-# 6. チャット入力の受け付け
+# 6. チャット入力の受け付け（メインエリア内）
 ############################################################
 chat_message = st.chat_input(ct.CHAT_INPUT_HELPER_TEXT)
 
