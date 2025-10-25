@@ -19,6 +19,9 @@ from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import OpenAIEmbeddings
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.documents import Document
+from typing import List
 import constants as ct
 
 
@@ -385,13 +388,17 @@ def create_simple_keyword_retriever(docs_all):
     
     logger = logging.getLogger(ct.LOGGER_NAME)
     
-    class SimpleKeywordRetriever:
-        def __init__(self, documents):
-            self.documents = documents
+    class SimpleKeywordRetriever(BaseRetriever):
+        """LangChain互換のキーワードベースRetriever"""
+        
+        documents: List[Document]
+        
+        def __init__(self, documents: List[Document], **kwargs):
+            super().__init__(documents=documents, **kwargs)
             
-        def invoke(self, query, k=5):
+        def _get_relevant_documents(self, query: str, **kwargs) -> List[Document]:
             """
-            キーワードベースの簡易検索
+            キーワードベースの簡易検索（LangChain BaseRetriever互換）
             """
             query_lower = query.lower()
             scored_docs = []
@@ -422,9 +429,27 @@ def create_simple_keyword_retriever(docs_all):
                 if score > 0:
                     scored_docs.append((score, doc))
             
-            # スコア順にソートして上位k件を返す
+            # スコア順にソートして上位5件を返す（デフォルト）
             scored_docs.sort(key=lambda x: x[0], reverse=True)
-            return [doc for _, doc in scored_docs[:k]]
+            return [doc for _, doc in scored_docs[:5]]
+            
+        def invoke(self, input_data, config=None, **kwargs) -> List[Document]:
+            """
+            LangChain互換のinvokeメソッド
+            """
+            # inputからqueryを抽出
+            if isinstance(input_data, dict):
+                query = input_data.get("input", input_data.get("query", ""))
+            elif isinstance(input_data, str):
+                query = input_data
+            else:
+                query = str(input_data)
+                
+            k = kwargs.get("k", 5)
+            if not isinstance(k, int):
+                k = 5
+                
+            return self._get_relevant_documents(query, **kwargs)
     
     # 簡易検索システムをセッション状態に保存
     retriever = SimpleKeywordRetriever(docs_all)

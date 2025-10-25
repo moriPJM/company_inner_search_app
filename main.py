@@ -9,6 +9,8 @@
 from dotenv import load_dotenv
 # ログ出力を行うためのモジュール
 import logging
+# OSの操作を行うためのモジュール
+import os
 # streamlitアプリの表示を担当するモジュール
 import streamlit as st
 # （自作）画面表示以外の様々な関数が定義されているモジュール
@@ -111,13 +113,48 @@ logger = logging.getLogger(ct.LOGGER_NAME)
 try:
     # 初期化処理（「initialize.py」の「initialize」関数を実行）
     initialize()
+    
+    # 初期化成功の確認
+    if not hasattr(st.session_state, 'retriever'):
+        logger.warning("Retriever not found after initialization, creating fallback")
+        st.session_state.retriever = None
+        
 except Exception as e:
     # エラーログの出力
     logger.error(f"{ct.INITIALIZE_ERROR_MESSAGE}\n{e}")
-    # エラーメッセージの画面表示
+    
+    # 詳細エラー情報を表示
     st.error(utils.build_error_message(ct.INITIALIZE_ERROR_MESSAGE), icon=ct.ERROR_ICON)
-    # 後続の処理を中断
-    st.stop()
+    
+    # 初期化失敗時の詳細情報
+    with st.expander("初期化エラーの詳細情報（管理者向け）"):
+        st.code(f"""
+エラー詳細: {str(e)}
+環境変数SKIP_HUGGINGFACE: {os.getenv('SKIP_HUGGINGFACE', 'not set')}
+環境変数TOKENIZERS_PARALLELISM: {os.getenv('TOKENIZERS_PARALLELISM', 'not set')}
+""")
+    
+    # フォールバック初期化を試行
+    try:
+        logger.info("Attempting fallback initialization")
+        # 最小限の初期化
+        if "session_id" not in st.session_state:
+            from uuid import uuid4
+            st.session_state.session_id = uuid4().hex
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+        
+        # Retrieverをフォールバック状態に設定
+        st.session_state.retriever = None
+        
+        st.warning("⚠️ 初期化が部分的に失敗しましたが、限定機能で動作を継続します。", icon="⚠️")
+        
+    except Exception as fallback_error:
+        logger.error(f"Fallback initialization also failed: {fallback_error}")
+        # 完全な失敗の場合のみ停止
+        st.stop()
 
 # アプリ起動時のログファイルへの出力
 if not "initialized" in st.session_state:
@@ -188,13 +225,42 @@ if chat_message:
     # LLMによる回答生成（回答生成が完了するまでグルグル回す）
     with st.spinner(ct.SPINNER_TEXT):
         try:
+            # 初期化状態の確認
+            if not hasattr(st.session_state, 'retriever'):
+                logger.warning("Retriever not initialized, attempting emergency initialization")
+                # 緊急初期化を試行
+                try:
+                    initialize()
+                except Exception as init_error:
+                    logger.error(f"Emergency initialization failed: {init_error}")
+                    # 完全にフォールバックモードで動作
+                    st.session_state.retriever = None
+            
             # 画面読み込み時に作成したRetrieverを使い、Chainを実行
             llm_response = utils.get_llm_response(chat_message)
+            
+            # 回答が正常に生成されたかチェック
+            if not llm_response or 'answer' not in llm_response:
+                raise Exception("Invalid response structure generated")
+                
         except Exception as e:
             # エラーログの出力
             logger.error(f"{ct.GET_LLM_RESPONSE_ERROR_MESSAGE}\n{e}")
+            logger.error(f"Session state debug - retriever: {hasattr(st.session_state, 'retriever')}")
+            logger.error(f"Session state debug - mode: {getattr(st.session_state, 'mode', 'UNKNOWN')}")
+            
             # エラーメッセージの画面表示
             st.error(utils.build_error_message(ct.GET_LLM_RESPONSE_ERROR_MESSAGE), icon=ct.ERROR_ICON)
+            
+            # 詳細エラー情報（デバッグ用）
+            with st.expander("詳細エラー情報（管理者向け）"):
+                st.code(f"""
+エラー詳細: {str(e)}
+初期化状態: {'✓' if hasattr(st.session_state, 'retriever') else '✗'}
+Retriever状態: {getattr(st.session_state, 'retriever', 'NOT_SET')}
+モード: {getattr(st.session_state, 'mode', 'UNKNOWN')}
+""")
+            
             # 後続の処理を中断
             st.stop()
     
