@@ -139,30 +139,54 @@ def initialize_retriever():
             for key in doc.metadata:
                 doc.metadata[key] = adjust_string(doc.metadata[key])
         
-                # ローカル埋め込みモデルの使用（軽量化対応）
-        logger.info("Attempting to use lightweight local embeddings")
-        try:
-            # より軽量なモデルを試行
-            import warnings
-            warnings.filterwarnings("ignore", category=DeprecationWarning)
-            
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",  # より軽量
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
-            )
-            logger.info("Local embeddings model loaded successfully")
-            
-        except Exception as e:
-            logger.error(f"Local embeddings failed: {e}")
+        # エンベディングモデルの初期化（フォールバック対応）
+        logger.info("Initializing embeddings with fallback strategy")
+        embeddings = None
+        
+        # 環境変数でHuggingFaceをスキップするオプション
+        skip_huggingface = os.getenv('SKIP_HUGGINGFACE', 'false').lower() == 'true'
+        
+        if not skip_huggingface:
+            # ローカル埋め込みモデルの使用を試行
+            logger.info("Attempting to use lightweight local embeddings")
+            try:
+                import warnings
+                
+                # PyTorchの問題を回避するため、環境変数を設定
+                os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+                
+                warnings.filterwarnings("ignore", category=DeprecationWarning)
+                warnings.filterwarnings("ignore", category=UserWarning)
+                
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",
+                    model_kwargs={'device': 'cpu'},
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                logger.info("Local embeddings model loaded successfully")
+                
+            except Exception as e:
+                logger.error(f"Local embeddings failed: {e}")
+                embeddings = None
+        
+        # OpenAIエンベディングにフォールバック
+        if embeddings is None:
             logger.info("Falling back to OpenAI embeddings")
             try:
                 embeddings = OpenAIEmbeddings()
+                logger.info("OpenAI embeddings loaded successfully")
             except Exception as api_error:
                 logger.error(f"OpenAI embeddings also failed: {api_error}")
-                # キーワードベースの検索に切り替え
-                return create_simple_keyword_retriever(docs_all)
+                embeddings = None
         
+        # キーワードベース検索にフォールバック
+        if embeddings is None:
+            logger.info("Falling back to keyword-based search")
+            retriever = create_simple_keyword_retriever(docs_all)
+            st.session_state.retriever = retriever
+            logger.info("Keyword-based retriever initialized successfully")
+            return
+
         # チャンク分割用のオブジェクトを作成
         text_splitter = CharacterTextSplitter(
             chunk_size=ct.CHUNK_SIZE,
@@ -208,13 +232,27 @@ def initialize_retriever():
         # 社員名簿専用の高精度検索のため、ベクトルストアも保存
         st.session_state.vectorstore = db
         
-        logger.info("Retriever initialized successfully with local HuggingFace embeddings")
+        logger.info("Retriever initialized successfully")
         
     except Exception as e:
-        logger.error(f"Error initializing retriever: {str(e)}")
-        raise e
-
-
+        logger.error(f"Critical error in retriever initialization: {str(e)}")
+        
+        # 最終フォールバック: キーワードベース検索
+        try:
+            logger.info("Attempting final fallback to keyword-based search")
+            docs_all = load_data_sources()
+            docs_all = consolidate_documents_by_source(docs_all)
+            docs_all = prioritize_important_documents(docs_all)
+            
+            retriever = create_simple_keyword_retriever(docs_all)
+            st.session_state.retriever = retriever
+            logger.info("Final fallback successful - keyword-based retriever initialized")
+            
+        except Exception as fallback_error:
+            logger.error(f"Final fallback also failed: {fallback_error}")
+            # 空のretrieverを設定して完全な失敗を防ぐ
+            st.session_state.retriever = None
+            raise Exception(f"Complete initialization failure: {str(e)}, Fallback error: {str(fallback_error)}")
 def initialize_session_state():
     """
     初期化データの用意
@@ -389,8 +427,9 @@ def create_simple_keyword_retriever(docs_all):
             return [doc for _, doc in scored_docs[:k]]
     
     # 簡易検索システムをセッション状態に保存
-    st.session_state.retriever = SimpleKeywordRetriever(docs_all)
+    retriever = SimpleKeywordRetriever(docs_all)
     logger.info("Simple keyword-based retriever created successfully")
+    return retriever
 
 
 def recursive_file_check(path, docs_all):
