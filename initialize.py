@@ -131,10 +131,6 @@ def initialize_retriever():
         
         # 重要なドキュメント（社員名簿など）を優先して含める
         docs_all = prioritize_important_documents(docs_all)
-        
-        # テスト用に最初の10ドキュメントのみを使用（処理速度向上）
-        docs_all = docs_all[:10]
-        logger.info(f"Using {len(docs_all)} documents for testing")
 
         # OSがWindowsの場合、Unicode正規化と、cp932（Windows用の文字コード）で表現できない文字を除去
         for doc in docs_all:

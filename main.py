@@ -62,23 +62,33 @@ st.markdown("""
         border: 1px solid #90ee90 !important;
     }
     
-    /* AIアシスタントのメッセージ背景を薄い緑色に（複数のセレクタを試す） */
-    .stChatMessage[data-testid="assistant-message"],
-    .stChatMessage[data-testid="chat-message-assistant"],
-    div[data-testid="chat-message-assistant"],
-    .stChatMessage:has([data-testid="assistant-avatar"]) {
-        background-color: #e8f5e8 !important;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
+    /* 全てのチャットメッセージコンテナを対象に */
+    div[data-testid="stChatMessage"] {
+        background-color: #d4edda !important;
+        border-radius: 10px !important;
+        padding: 15px !important;
+        margin: 10px 0 !important;
+        border: 1px solid #c3e6cb !important;
     }
     
-    /* チャットメッセージ全般のスタイル（assistantアバターを含む） */
-    div[data-testid="stChatMessage"]:has(img[alt="assistant"]) {
-        background-color: #e8f5e8 !important;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
+    /* チャットメッセージ内の全てのテキストを緑色に */
+    div[data-testid="stChatMessage"] * {
+        color: #155724 !important;
+    }
+    
+    /* 具体的なMarkdown要素も対象に */
+    div[data-testid="stChatMessage"] .stMarkdown,
+    div[data-testid="stChatMessage"] .stMarkdown *,
+    div[data-testid="stChatMessage"] p,
+    div[data-testid="stChatMessage"] div {
+        color: #155724 !important;
+    }
+    
+    /* 警告メッセージも緑に統一 */
+    div[data-testid="stChatMessage"] div[data-testid="stAlert"] {
+        background-color: #d1ecf1 !important;
+        color: #0c5460 !important;
+        border: 1px solid #bee5eb !important;
     }
     
     /* 警告メッセージのスタイル調整 */
