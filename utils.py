@@ -83,6 +83,11 @@ def get_llm_response(chat_message):
         LLMからの回答
     """
     try:
+        # 初期化状態をチェック
+        if not hasattr(st.session_state, 'retriever') or st.session_state.retriever is None:
+            # 初期化が完了していない場合、基本的なモック回答を返す
+            return get_fallback_mock_response(chat_message)
+        
         # OpenAI LLMを試行
         llm = ChatOpenAI(model_name=ct.MODEL, temperature=ct.TEMPERATURE)
         
@@ -137,6 +142,43 @@ def get_llm_response(chat_message):
             raise e
 
 
+def get_fallback_mock_response(chat_message):
+    """
+    初期化未完了時のフォールバック回答生成
+    
+    Args:
+        chat_message: ユーザー入力値
+        
+    Returns:
+        フォールバック回答
+    """
+    # 基本的な回答を生成
+    answer = f"""申し訳ございません。現在システムの初期化中のため、一時的に回答を生成できません。
+
+お問い合わせ内容: 「{chat_message}」
+
+しばらく時間をおいて再度お試しください。問題が継続する場合は、管理者にお問い合わせください。
+
+※ このメッセージは初期化未完了時の一時的な回答です。"""
+    
+    # 会話履歴に追加（chat_historyが存在する場合のみ）
+    if hasattr(st.session_state, 'chat_history') and st.session_state.chat_history is not None:
+        st.session_state.chat_history.extend([
+            HumanMessage(content=chat_message), 
+            AIMessage(content=answer)
+        ])
+    
+    # モック回答の構築
+    mock_response = {
+        "input": chat_message,
+        "chat_history": getattr(st.session_state, 'chat_history', []),
+        "context": [],
+        "answer": answer
+    }
+    
+    return mock_response
+
+
 def get_mock_llm_response(chat_message):
     """
     OpenAI APIクォータ制限時のモック回答生成
@@ -147,6 +189,10 @@ def get_mock_llm_response(chat_message):
     Returns:
         モック回答
     """
+    # Retrieverが初期化されていない場合のチェック
+    if not hasattr(st.session_state, 'retriever') or st.session_state.retriever is None:
+        return get_fallback_mock_response(chat_message)
+    
     # 人事部検索の場合、特別な処理を実行
     if ("人事部" in chat_message or "人事" in chat_message) and ("従業員" in chat_message or "社員" in chat_message or "一覧" in chat_message):
         docs = get_hr_employee_documents(chat_message)
@@ -184,45 +230,71 @@ def get_hr_employee_documents(chat_message):
     Returns:
         関連ドキュメントリスト
     """
-    # まず通常のベクトル検索を実行
-    docs = st.session_state.retriever.invoke(chat_message)
+    try:
+        # Retrieverが初期化されているかチェック
+        if not hasattr(st.session_state, 'retriever') or st.session_state.retriever is None:
+            # Retrieverが初期化されていない場合、CSVから直接読み込み
+            return get_csv_documents_directly()
+        
+        # まず通常のベクトル検索を実行
+        docs = st.session_state.retriever.invoke(chat_message)
+        
+        # 社員名簿が含まれているかチェック
+        csv_found = any('社員名簿.csv' in doc.metadata.get('source', '') for doc in docs)
+        
+        if csv_found:
+            return docs
+        
+        # 社員名簿が見つからない場合、ベクトルストアから直接検索
+        if hasattr(st.session_state, 'vectorstore'):
+            try:
+                # 人事部関連のキーワードで複数回検索
+                hr_keywords = ['人事部', '人事', 'HR', '社員名簿', '従業員', '社員']
+                all_docs = []
+                
+                for keyword in hr_keywords:
+                    keyword_docs = st.session_state.vectorstore.similarity_search(keyword, k=5)
+                    all_docs.extend(keyword_docs)
+                
+                # 重複除去
+                unique_docs = []
+                seen_sources = set()
+                for doc in all_docs:
+                    source = doc.metadata.get('source', '')
+                    if source not in seen_sources:
+                        unique_docs.append(doc)
+                        seen_sources.add(source)
+                
+                # 社員名簿を最優先
+                csv_docs = [doc for doc in unique_docs if '社員名簿.csv' in doc.metadata.get('source', '')]
+                other_docs = [doc for doc in unique_docs if '社員名簿.csv' not in doc.metadata.get('source', '')]
+                
+                return csv_docs + other_docs[:4]  # 社員名簿 + その他4つ
+                
+            except Exception as e:
+                print(f"Vectorstore search error: {e}")
+        
+        return docs  # フォールバック
+        
+    except Exception as e:
+        print(f"HR employee search error: {e}")
+        # エラーが発生した場合、CSVから直接読み込みを試行
+        return get_csv_documents_directly()
+
+
+def get_csv_documents_directly():
+    """
+    CSVファイルから直接ドキュメントを読み込む
     
-    # 社員名簿が含まれているかチェック
-    csv_found = any('社員名簿.csv' in doc.metadata.get('source', '') for doc in docs)
-    
-    if csv_found:
-        return docs
-    
-    # 社員名簿が見つからない場合、ベクトルストアから直接検索
-    if hasattr(st.session_state, 'vectorstore'):
-        try:
-            # 人事部関連のキーワードで複数回検索
-            hr_keywords = ['人事部', '人事', 'HR', '社員名簿', '従業員', '社員']
-            all_docs = []
-            
-            for keyword in hr_keywords:
-                keyword_docs = st.session_state.vectorstore.similarity_search(keyword, k=5)
-                all_docs.extend(keyword_docs)
-            
-            # 重複除去
-            unique_docs = []
-            seen_sources = set()
-            for doc in all_docs:
-                source = doc.metadata.get('source', '')
-                if source not in seen_sources:
-                    unique_docs.append(doc)
-                    seen_sources.add(source)
-            
-            # 社員名簿を最優先
-            csv_docs = [doc for doc in unique_docs if '社員名簿.csv' in doc.metadata.get('source', '')]
-            other_docs = [doc for doc in unique_docs if '社員名簿.csv' not in doc.metadata.get('source', '')]
-            
-            return csv_docs + other_docs[:4]  # 社員名簿 + その他4つ
-            
-        except Exception as e:
-            print(f"Vectorstore search error: {e}")
-    
-    return docs  # フォールバック
+    Returns:
+        CSVドキュメントリスト
+    """
+    try:
+        csv_path = './data/社員について/社員名簿.csv'
+        return ct.custom_csv_loader(csv_path)
+    except Exception as e:
+        print(f"Direct CSV loading error: {e}")
+        return []  # 空のリストを返す
 
 
 def generate_detailed_mock_answer(chat_message, docs):
