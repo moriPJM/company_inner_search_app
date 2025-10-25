@@ -236,18 +236,55 @@ def generate_detailed_mock_answer(chat_message, docs):
     Returns:
         詳細なモック回答
     """
-    # 議事録ルールに関する質問の場合、特別な回答を生成
-    if "議事録" in chat_message and ("ルール" in chat_message or "規則" in chat_message):
-        for doc in docs:
-            if "議事録ルール.txt" in doc.metadata.get("source", ""):
-                return f"""議事録のルールについてお答えします：
+    try:
+        # 議事録ルールに関する質問の場合、特別な回答を生成
+        if "議事録" in chat_message and ("ルール" in chat_message or "規則" in chat_message):
+            for doc in docs:
+                if "議事録ルール.txt" in doc.metadata.get("source", ""):
+                    return f"""議事録のルールについてお答えします：
 
 {doc.page_content}
 
 ※ 現在OpenAI APIの使用制限のため、簡易版での回答となっています。完全な機能については管理者にお問い合わせください。"""
+        
+        # 人事部従業員検索の場合、特別な回答を生成
+        if ("人事部" in chat_message or "人事" in chat_message) and ("従業員" in chat_message or "社員" in chat_message or "一覧" in chat_message):
+            return generate_hr_employee_response(chat_message, docs)
+        
+        # その他の質問の場合、関連文書の内容を要約して返答
+        if docs:
+            relevant_content = []
+            for i, doc in enumerate(docs[:3]):  # 最初の3つの関連文書を使用
+                source = doc.metadata.get("source", "不明")
+                content = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
+                relevant_content.append(f"【関連文書 {i+1}】\n出典: {source}\n内容: {content}")
+            
+            return f"""「{chat_message}」に関連する情報を検索しました：
+
+{chr(10).join(relevant_content)}
+
+※ 現在OpenAI APIの使用制限のため、関連文書の抜粋のみを表示しています。完全な機能については管理者にお問い合わせください。"""
+        
+        # 関連文書が見つからない場合
+        return f"申し訳ございませんが、「{chat_message}」に関連する文書が見つかりませんでした。現在OpenAI APIの使用制限のため、簡易版での検索となっています。完全な機能については管理者にお問い合わせください。"
     
-    # 人事部従業員検索の場合、特別な回答を生成
-    if ("人事部" in chat_message or "人事" in chat_message) and ("従業員" in chat_message or "社員" in chat_message or "一覧" in chat_message):
+    except Exception as e:
+        # エラーが発生した場合のフォールバック
+        return f"回答生成中にエラーが発生しました。申し訳ございませんが、しばらく時間をおいて再度お試しください。エラーの詳細: {str(e)}"
+
+
+def generate_hr_employee_response(chat_message, docs):
+    """
+    人事部従業員検索の回答を生成
+    
+    Args:
+        chat_message: ユーザー入力値
+        docs: 関連ドキュメント
+        
+    Returns:
+        人事部従業員検索の回答
+    """
+    try:
         for doc in docs:
             if "社員名簿.csv" in doc.metadata.get("source", ""):
                 # 人事部従業員の詳細情報を抽出
@@ -336,6 +373,13 @@ def generate_detailed_mock_answer(chat_message, docs):
                             st.session_state.hr_table_data = table_data
                         
                         return response
+        
+        # 人事部従業員が見つからない場合
+        return f"申し訳ございませんが、人事部従業員の情報が見つかりませんでした。データの確認をお願いします。"
+    
+    except Exception as e:
+        # エラーが発生した場合のフォールバック
+        return f"人事部従業員情報の取得中にエラーが発生しました: {str(e)}"
     
     # その他の質問の場合、関連文書の内容を要約して返答
     if docs:

@@ -18,6 +18,7 @@ from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
 import constants as ct
 
 
@@ -119,7 +120,7 @@ def initialize_retriever():
     logger = logging.getLogger(ct.LOGGER_NAME)
 
     # すでにRetrieverが作成済みの場合、後続の処理を中断
-    if "retriever" in st.session_state:
+    if hasattr(st.session_state, "retriever") and st.session_state.retriever is not None:
         return
     
     try:
@@ -138,22 +139,29 @@ def initialize_retriever():
             for key in doc.metadata:
                 doc.metadata[key] = adjust_string(doc.metadata[key])
         
-        # ローカル埋め込みモデルの使用（軽量化対応）
+                # ローカル埋め込みモデルの使用（軽量化対応）
         logger.info("Attempting to use lightweight local embeddings")
         try:
             # より軽量なモデルを試行
+            import warnings
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            
             embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",  # より軽量
                 model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
-            logger.info("Using lightweight HuggingFace embeddings model")
-        except Exception as embed_error:
-            logger.error(f"HuggingFace embeddings failed: {embed_error}")
-            # 軽量埋め込みも失敗した場合、簡易検索モードに切り替え
-            logger.info("Switching to simple keyword-based search mode")
-            create_simple_keyword_retriever(docs_all)
-            return
+            logger.info("Local embeddings model loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Local embeddings failed: {e}")
+            logger.info("Falling back to OpenAI embeddings")
+            try:
+                embeddings = OpenAIEmbeddings()
+            except Exception as api_error:
+                logger.error(f"OpenAI embeddings also failed: {api_error}")
+                # キーワードベースの検索に切り替え
+                return create_simple_keyword_retriever(docs_all)
         
         # チャンク分割用のオブジェクトを作成
         text_splitter = CharacterTextSplitter(
