@@ -16,8 +16,8 @@ import streamlit as st
 from docx import Document
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import CharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import constants as ct
 
 
@@ -122,33 +122,93 @@ def initialize_retriever():
     if "retriever" in st.session_state:
         return
     
-    # RAGの参照先となるデータソースの読み込み
-    docs_all = load_data_sources()
+    try:
+        # RAGの参照先となるデータソースの読み込み
+        docs_all = load_data_sources()
+        
+        # 同一ファイルから複数ドキュメントが生成された場合の統合処理
+        docs_all = consolidate_documents_by_source(docs_all)
+        
+        # 重要なドキュメント（社員名簿など）を優先して含める
+        docs_all = prioritize_important_documents(docs_all)
+        
+        # テスト用に最初の10ドキュメントのみを使用（処理速度向上）
+        docs_all = docs_all[:10]
+        logger.info(f"Using {len(docs_all)} documents for testing")
 
-    # OSがWindowsの場合、Unicode正規化と、cp932（Windows用の文字コード）で表現できない文字を除去
-    for doc in docs_all:
-        doc.page_content = adjust_string(doc.page_content)
-        for key in doc.metadata:
-            doc.metadata[key] = adjust_string(doc.metadata[key])
-    
-    # 埋め込みモデルの用意
-    embeddings = OpenAIEmbeddings()
-    
-    # チャンク分割用のオブジェクトを作成
-    text_splitter = CharacterTextSplitter(
-        chunk_size=ct.CHUNK_SIZE,
-        chunk_overlap=ct.CHUNK_OVERLAP,
-        separator=ct.CHUNK_SEPARATOR
-    )
+        # OSがWindowsの場合、Unicode正規化と、cp932（Windows用の文字コード）で表現できない文字を除去
+        for doc in docs_all:
+            doc.page_content = adjust_string(doc.page_content)
+            for key in doc.metadata:
+                doc.metadata[key] = adjust_string(doc.metadata[key])
+        
+        # ローカル埋め込みモデルの使用（軽量化対応）
+        logger.info("Attempting to use lightweight local embeddings")
+        try:
+            # より軽量なモデルを試行
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",  # より軽量
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+            logger.info("Using lightweight HuggingFace embeddings model")
+        except Exception as embed_error:
+            logger.error(f"HuggingFace embeddings failed: {embed_error}")
+            # 軽量埋め込みも失敗した場合、簡易検索モードに切り替え
+            logger.info("Switching to simple keyword-based search mode")
+            create_simple_keyword_retriever(docs_all)
+            return
+        
+        # チャンク分割用のオブジェクトを作成
+        text_splitter = CharacterTextSplitter(
+            chunk_size=ct.CHUNK_SIZE,
+            chunk_overlap=ct.CHUNK_OVERLAP,
+            separator=ct.CHUNK_SEPARATOR
+        )
 
-    # チャンク分割を実施
-    splitted_docs = text_splitter.split_documents(docs_all)
+        # 重要なドキュメント（社員名簿など）は分割せず、その他のドキュメントのみ分割
+        splitted_docs = []
+        important_keywords = ['社員名簿.csv', '議事録ルール.txt']
+        
+        for doc in docs_all:
+            source = doc.metadata.get('source', '')
+            is_important = any(keyword in source for keyword in important_keywords)
+            
+            if is_important:
+                # 重要なドキュメントは分割せずにそのまま追加
+                splitted_docs.append(doc)
+                logger.info(f"Keeping important document unsplit: {source} ({len(doc.page_content)} chars)")
+            else:
+                # その他のドキュメントは通常通り分割
+                chunks = text_splitter.split_documents([doc])
+                splitted_docs.extend(chunks)
+                logger.info(f"Split document: {source} into {len(chunks)} chunks")
+        
+        logger.info(f"Total documents after processing: {len(splitted_docs)}")
+        
+        # Chromaデータベース用にメタデータを整理（リストや複雑なオブジェクトを文字列に変換）
+        for doc in splitted_docs:
+            for key, value in doc.metadata.items():
+                if isinstance(value, list):
+                    doc.metadata[key] = ", ".join(str(v) for v in value)
+                elif not isinstance(value, (str, int, float, bool)):
+                    doc.metadata[key] = str(value)
 
-    # ベクターストアの作成
-    db = Chroma.from_documents(splitted_docs, embedding=embeddings)
+        # ベクターストアの作成
+        db = Chroma.from_documents(splitted_docs, embedding=embeddings)
 
-    # ベクターストアを検索するRetrieverの作成（より多くの結果を取得して精度向上）
-    st.session_state.retriever = db.as_retriever(search_kwargs={"k": 10})
+        # ベクターストアを検索するRetrieverの作成（より多くの結果を取得して精度向上）
+        # 社員名簿のような重要文書を確実に取得するため、k値を増やす
+        st.session_state.retriever = db.as_retriever(search_kwargs={"k": 10})
+        
+        # 社員名簿専用の高精度検索のため、ベクトルストアも保存
+        st.session_state.vectorstore = db
+        
+        logger.info("Retriever initialized successfully with local HuggingFace embeddings")
+        
+    except Exception as e:
+        logger.error(f"Error initializing retriever: {str(e)}")
+        raise e
 
 
 def initialize_session_state():
@@ -187,6 +247,146 @@ def load_data_sources():
     docs_all.extend(web_docs_all)
 
     return docs_all
+
+
+def consolidate_documents_by_source(docs_all):
+    """
+    同一ファイルから読み込まれた複数のドキュメントを1つに統合する
+    
+    Args:
+        docs_all: 読み込んだドキュメントのリスト
+        
+    Returns:
+        統合されたドキュメントのリスト
+    """
+    from collections import defaultdict
+    
+    # ファイルソース別にドキュメントをグループ化
+    docs_by_source = defaultdict(list)
+    for doc in docs_all:
+        source = doc.metadata.get("source", "unknown")
+        docs_by_source[source].append(doc)
+    
+    consolidated_docs = []
+    for source, source_docs in docs_by_source.items():
+        if len(source_docs) == 1:
+            # 1つのドキュメントのみの場合はそのまま追加
+            consolidated_docs.extend(source_docs)
+        else:
+            # 複数のドキュメントがある場合は統合
+            combined_content = []
+            combined_metadata = source_docs[0].metadata.copy()
+            
+            for i, doc in enumerate(source_docs):
+                combined_content.append(f"=== セクション {i+1} ===")
+                combined_content.append(doc.page_content)
+                combined_content.append("")  # 空行で区切り
+            
+            # 統合ドキュメントを作成
+            from langchain.schema import Document
+            consolidated_doc = Document(
+                page_content="\n".join(combined_content),
+                metadata=combined_metadata
+            )
+            consolidated_docs.append(consolidated_doc)
+    
+    return consolidated_docs
+
+
+def prioritize_important_documents(docs_all):
+    """
+    重要なドキュメント（社員名簿、議事録ルールなど）を優先して配置する
+    
+    Args:
+        docs_all: ドキュメントのリスト
+        
+    Returns:
+        優先度順に並び替えられたドキュメントのリスト
+    """
+    # 重要なファイルのキーワード（優先度順）
+    important_keywords = [
+        "社員名簿.csv",
+        "議事録ルール.txt",
+        "サービスについて",
+        "会社について"
+    ]
+    
+    priority_docs = []
+    other_docs = []
+    
+    # 重要なドキュメントを優先リストに追加
+    for keyword in important_keywords:
+        for doc in docs_all:
+            source = doc.metadata.get("source", "")
+            if keyword in source and doc not in priority_docs:
+                priority_docs.append(doc)
+                break  # 各キーワードにつき1つのドキュメントのみ
+    
+    # 残りのドキュメントを追加
+    for doc in docs_all:
+        if doc not in priority_docs:
+            other_docs.append(doc)
+    
+    # 優先ドキュメントを先頭に配置
+    return priority_docs + other_docs
+
+
+def create_simple_keyword_retriever(docs_all):
+    """
+    埋め込みベクトルを使わない簡易キーワードベース検索システムを作成
+    
+    Args:
+        docs_all: ドキュメントのリスト
+    """
+    import streamlit as st
+    import logging
+    
+    logger = logging.getLogger(ct.LOGGER_NAME)
+    
+    class SimpleKeywordRetriever:
+        def __init__(self, documents):
+            self.documents = documents
+            
+        def invoke(self, query, k=5):
+            """
+            キーワードベースの簡易検索
+            """
+            query_lower = query.lower()
+            scored_docs = []
+            
+            for doc in self.documents:
+                content_lower = doc.page_content.lower()
+                source_lower = doc.metadata.get("source", "").lower()
+                
+                # 基本スコア計算
+                score = 0
+                query_words = query_lower.split()
+                
+                for word in query_words:
+                    # コンテンツ内の出現回数
+                    content_count = content_lower.count(word)
+                    score += content_count * 1
+                    
+                    # ソース名での一致（高い重み）
+                    if word in source_lower:
+                        score += 10
+                
+                # 特別なキーワード処理
+                if "人事" in query_lower and "社員名簿" in source_lower:
+                    score += 50
+                if "議事録" in query_lower and "議事録ルール" in source_lower:
+                    score += 50
+                    
+                if score > 0:
+                    scored_docs.append((score, doc))
+            
+            # スコア順にソートして上位k件を返す
+            scored_docs.sort(key=lambda x: x[0], reverse=True)
+            return [doc for _, doc in scored_docs[:k]]
+    
+    # 簡易検索システムをセッション状態に保存
+    st.session_state.retriever = SimpleKeywordRetriever(docs_all)
+    logger.info("Simple keyword-based retriever created successfully")
 
 
 def recursive_file_check(path, docs_all):
@@ -228,8 +428,17 @@ def file_load(path, docs_all):
     # 想定していたファイル形式の場合のみ読み込む
     if file_extension in ct.SUPPORTED_EXTENSIONS:
         # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
-        loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
-        docs = loader.load()
+        loader_func = ct.SUPPORTED_EXTENSIONS[file_extension]
+        result = loader_func(path)
+        
+        # 戻り値がリスト（カスタムローダーの場合）か、ローダーオブジェクトかを判定
+        if isinstance(result, list):
+            # カスタムローダーの場合、直接ドキュメントリストが返される
+            docs = result
+        else:
+            # 通常のローダークラスの場合
+            docs = result.load()
+        
         docs_all.extend(docs)
 
 

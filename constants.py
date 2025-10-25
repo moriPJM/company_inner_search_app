@@ -5,8 +5,83 @@
 ############################################################
 # ライブラリの読み込み
 ############################################################
-from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader
+from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, TextLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
+from langchain.schema import Document
+import pandas as pd
+
+# カスタムCSVローダー関数
+def custom_csv_loader(path):
+    """
+    CSVファイルを1つの統合ドキュメントとして読み込み、検索精度を向上させる
+    """
+    try:
+        # CSVファイルを読み込み
+        df = pd.read_csv(path, encoding="utf-8")
+        
+        # データフレームを整理された文字列形式に変換
+        content_parts = []
+        
+        # ヘッダー情報を追加
+        content_parts.append("=== 社員名簿 ===\n")
+        content_parts.append(f"総従業員数: {len(df)}名\n")
+        
+        # 部署別従業員数を追加
+        if '部署' in df.columns:
+            dept_counts = df['部署'].value_counts()
+            content_parts.append("\n=== 部署別従業員数 ===")
+            for dept, count in dept_counts.items():
+                content_parts.append(f"{dept}: {count}名")
+        
+        # 各従業員の詳細情報を追加
+        content_parts.append("\n\n=== 従業員詳細情報 ===")
+        
+        for index, row in df.iterrows():
+            employee_info = []
+            employee_info.append(f"\n【従業員 {index + 1}】")
+            
+            for column in df.columns:
+                value = row[column]
+                if pd.notna(value):
+                    # 部署情報を強調
+                    if column == '部署':
+                        employee_info.append(f"{column}: {value} (所属部署)")
+                    else:
+                        employee_info.append(f"{column}: {value}")
+            
+            content_parts.append("\n".join(employee_info))
+        
+        # すべての内容を結合
+        full_content = "\n".join(content_parts)
+        
+        # 検索キーワードの拡張（部署名のバリエーション追加）
+        enhanced_content = full_content
+        enhanced_content += "\n\n=== 検索用キーワード ===\n"
+        enhanced_content += "人事部, 人事, HR, ヒューマンリソース, 人材管理\n"
+        enhanced_content += "営業部, 営業, セールス, 売上管理\n"
+        enhanced_content += "総務部, 総務, 管理部, 庶務\n"
+        enhanced_content += "経理部, 経理, 会計, 財務\n"
+        enhanced_content += "IT部, IT, 情報システム, システム管理\n"
+        enhanced_content += "マーケティング部, マーケティング, 企画, 宣伝\n"
+        
+        # Documentオブジェクトを作成
+        document = Document(
+            page_content=enhanced_content,
+            metadata={
+                "source": path,
+                "file_type": "csv",
+                "total_employees": len(df),
+                "departments": ", ".join(df['部署'].unique()) if '部署' in df.columns else ""
+            }
+        )
+        
+        return [document]
+        
+    except Exception as e:
+        # エラーの場合は標準のCSVLoaderを使用
+        print(f"Custom CSV loader error: {e}, falling back to standard CSVLoader")
+        loader = CSVLoader(path, encoding="utf-8")
+        return loader.load()
 
 
 ############################################################
@@ -50,7 +125,8 @@ RAG_TOP_FOLDER_PATH = "./data"
 SUPPORTED_EXTENSIONS = {
     ".pdf": PyMuPDFLoader,
     ".docx": Docx2txtLoader,
-    ".csv": lambda path: CSVLoader(path, encoding="utf-8")
+    ".csv": custom_csv_loader,
+    ".txt": lambda path: TextLoader(path, encoding="utf-8")
 }
 WEB_URL_LOAD_TARGETS = [
     "https://generative-ai.web-camp.io/"

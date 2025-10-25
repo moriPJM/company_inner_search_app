@@ -6,6 +6,7 @@
 # ライブラリの読み込み
 ############################################################
 import streamlit as st
+import pandas as pd
 import utils
 import constants as ct
 
@@ -25,26 +26,24 @@ def display_select_mode():
     """
     回答モードのラジオボタンを表示（サイドバー用）
     """
-    # 「label_visibility="collapsed"」とすることで、ラジオボタンのラベルを非表示にする
+    # 適切なラベルを設定してからlabel_visibilityで非表示に
     st.session_state.mode = st.radio(
-        label="",
+        label="利用目的を選択",
         options=[ct.ANSWER_MODE_1, ct.ANSWER_MODE_2],
         label_visibility="collapsed"
     )
     
-    # 選択されたモードに応じた詳細説明を表示
-    if st.session_state.mode == ct.ANSWER_MODE_1:
-        # 「社内文書検索」が選択された場合の説明
-        st.markdown("**【「社内文書検索」を選択した場合】**")
-        st.info("入力内容と関連性が高い社内文書のありかを検索できます。")
-        st.markdown("**【入力例】**")
-        st.code("社員の育成方針に関するMTGの議事録", language=None)
-    else:
-        # 「社内問い合わせ」が選択された場合の説明
-        st.markdown("**【「社内問い合わせ」を選択した場合】**")
-        st.info("質問・要望に対して、社内文書の情報をもとに回答を得られます。")
-        st.markdown("**【入力例】**")
-        st.code("人事部に所属している従業員情報を一覧化して", language=None)
+    # 「社内文書検索」の説明（常時表示）
+    st.markdown("**【「社内文書検索」を選択した場合】**")
+    st.info("入力内容と関連性が高い社内文書のありかを検索できます。")
+    st.markdown("**【入力例】**")
+    st.code("社員の育成方針に関するMTGの議事録", language=None)
+    
+    # 「社内問い合わせ」の説明（常時表示）
+    st.markdown("**【「社内問い合わせ」を選択した場合】**")
+    st.info("質問・要望に対して、社内文書の情報をもとに回答を得られます。")
+    st.markdown("**【入力例】**")
+    st.code("人事部に所属している従業員情報を一覧化して", language=None)
 
 
 def display_initial_ai_message():
@@ -52,8 +51,12 @@ def display_initial_ai_message():
     AIメッセージの初期表示（メインエリア用）
     """
     with st.chat_message("assistant"):
-        # 初期メッセージの表示
-        st.markdown("こんにちは。私は社内文書の情報をもとに回答する生成AIチャットボットです。サイドバーで利用目的を選択し、画面下部のチャット欄からメッセージを送信してください。")
+        # 初期メッセージの表示（HTMLでスタイル指定）
+        st.markdown("""
+        <div style="background-color: #d4edda; color: #155724; padding: 15px; border-radius: 10px; border: 1px solid #c3e6cb;">
+        こんにちは。私は社内文書の情報をもとに回答する生成AIチャットボットです。サイドバーで利用目的を選択し、画面下部のチャット欄からメッセージを送信してください。
+        </div>
+        """, unsafe_allow_html=True)
         
         # 注意喚起メッセージの表示
         st.warning("具体的に入力したほうが期待通りの回答を得やすいです。")
@@ -89,7 +92,7 @@ def display_conversation_log():
                         icon = utils.get_source_icon(message['content']['main_file_path'])
                         # 参照元ドキュメントのページ番号が取得できた場合にのみ、ページ番号を表示
                         if "main_page_number" in message["content"]:
-                            st.success(f"{message['content']['main_file_path']}", icon=icon)
+                            st.success(f"{message['content']['main_file_path']} （ページNo.{message['content']['main_page_number']}）", icon=icon)
                         else:
                             st.success(f"{message['content']['main_file_path']}", icon=icon)
                         
@@ -106,7 +109,7 @@ def display_conversation_log():
                                 icon = utils.get_source_icon(sub_choice['source'])
                                 # 参照元ドキュメントのページ番号が取得できた場合にのみ、ページ番号を表示
                                 if "page_number" in sub_choice:
-                                    st.info(f"{sub_choice['source']}", icon=icon)
+                                    st.info(f"{sub_choice['source']} （ページNo.{sub_choice['page_number']}）", icon=icon)
                                 else:
                                     st.info(f"{sub_choice['source']}", icon=icon)
                     # ファイルのありかの情報が取得できなかった場合、LLMからの回答のみ表示
@@ -158,10 +161,10 @@ def display_search_llm_response(llm_response):
         icon = utils.get_source_icon(main_file_path)
         # ページ番号が取得できた場合のみ、ページ番号を表示（ドキュメントによっては取得できない場合がある）
         if "page" in llm_response["context"][0].metadata:
-            # ページ番号を取得
-            main_page_number = llm_response["context"][0].metadata["page"]
+            # ページ番号を取得（0ベースから1ベースに変換）
+            main_page_number = llm_response["context"][0].metadata["page"] + 1
             # 「メインドキュメントのファイルパス」と「ページ番号」を表示
-            st.success(f"{main_file_path}", icon=icon)
+            st.success(f"{main_file_path} （ページNo.{main_page_number}）", icon=icon)
         else:
             # 「メインドキュメントのファイルパス」を表示
             st.success(f"{main_file_path}", icon=icon)
@@ -193,8 +196,8 @@ def display_search_llm_response(llm_response):
             
             # ページ番号が取得できない場合のための分岐処理
             if "page" in document.metadata:
-                # ページ番号を取得
-                sub_page_number = document.metadata["page"]
+                # ページ番号を取得（0ベースから1ベースに変換）
+                sub_page_number = document.metadata["page"] + 1
                 # 「サブドキュメントのファイルパス」と「ページ番号」の辞書を作成
                 sub_choice = {"source": sub_file_path, "page_number": sub_page_number}
             else:
@@ -217,7 +220,7 @@ def display_search_llm_response(llm_response):
                 # ページ番号が取得できない場合のための分岐処理
                 if "page_number" in sub_choice:
                     # 「サブドキュメントのファイルパス」と「ページ番号」を表示
-                    st.info(f"{sub_choice['source']}", icon=icon)
+                    st.info(f"{sub_choice['source']} （ページNo.{sub_choice['page_number']}）", icon=icon)
                 else:
                     # 「サブドキュメントのファイルパス」を表示
                     st.info(f"{sub_choice['source']}", icon=icon)
@@ -270,6 +273,44 @@ def display_contact_llm_response(llm_response):
     """
     # LLMからの回答を表示
     st.markdown(llm_response["answer"])
+    
+    # 人事部従業員一覧の場合、表データを表示
+    if hasattr(st.session_state, 'hr_table_data') and st.session_state.hr_table_data:
+        st.divider()
+        st.markdown("### 📊 人事部従業員一覧表")
+        
+        # DataFrameとして表示
+        import pandas as pd
+        df = pd.DataFrame(st.session_state.hr_table_data)
+        
+        # 列の順序を調整
+        column_order = ['社員ID', '氏名', '役職', '従業員区分', '入社日', 'メールアドレス']
+        existing_columns = [col for col in column_order if col in df.columns]
+        df = df[existing_columns]
+        
+        # インデックスを1から開始
+        df.index = range(1, len(df) + 1)
+        df.index.name = 'No.'
+        
+        # 表を表示
+        st.dataframe(
+            df, 
+            use_container_width=True,
+            column_config={
+                "社員ID": st.column_config.TextColumn("社員ID", width="small"),
+                "氏名": st.column_config.TextColumn("氏名", width="medium"),
+                "役職": st.column_config.TextColumn("役職", width="small"),
+                "従業員区分": st.column_config.TextColumn("従業員区分", width="small"),
+                "入社日": st.column_config.DateColumn("入社日", width="medium"),
+                "メールアドレス": st.column_config.TextColumn("メールアドレス", width="large")
+            }
+        )
+        
+        # 統計情報を表示
+        st.info(f"📈 **統計**: 人事部総従業員数 {len(df)}名")
+        
+        # 表データをリセット（次回の表示に影響しないよう）
+        st.session_state.hr_table_data = None
 
     # ユーザーの質問・要望に適切な回答を行うための情報が、社内文書のデータベースに存在しなかった場合
     if llm_response["answer"] != ct.INQUIRY_NO_MATCH_ANSWER:
@@ -294,10 +335,10 @@ def display_contact_llm_response(llm_response):
 
             # ページ番号が取得できた場合のみ、ページ番号を表示（ドキュメントによっては取得できない場合がある）
             if "page" in document.metadata:
-                # ページ番号を取得
-                page_number = document.metadata["page"]
+                # ページ番号を取得（0ベースから1ベースに変換）
+                page_number = document.metadata["page"] + 1
                 # 「ファイルパス」と「ページ番号」
-                file_info = f"{file_path}"
+                file_info = f"{file_path} （ページNo.{page_number}）"
             else:
                 # 「ファイルパス」のみ
                 file_info = f"{file_path}"
